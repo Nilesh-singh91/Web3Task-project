@@ -1,14 +1,14 @@
 // test-sync.js
 // Automated End-to-End Integration Test for YouTube Watch Party backend
-// Tests: Room creation, Roles (Host, Moderator, Participant), Permissions, Video Sync, Error Handling.
+// Tests: Room creation, Roles, Permissions, Video Sync with Timestamps, Chat, Error Handling.
 
-process.env.PORT = "5005";
+process.env.PORT = "5006";
 const { io } = require("socket.io-client");
 
-// Start backend server on test port 5005
+// Start backend server on test port 5006
 require("./src/server.js");
 
-const SERVER_URL = "http://localhost:5005";
+const SERVER_URL = "http://localhost:5006";
 const ROOM_ID = "PARTY1";
 
 let clientHost;
@@ -20,7 +20,7 @@ function wait(ms) {
 }
 
 async function runTests() {
-  console.log("\n🚀 STARTING WATCH PARTY REAL-TIME SYNC TESTS...\n");
+  console.log("\n🚀 STARTING WATCH PARTY REAL-TIME SYNC & CHAT TESTS...\n");
   await wait(1000);
 
   // TEST 1: Host connects and joins room
@@ -54,38 +54,38 @@ async function runTests() {
   clientUser2.emit("join_room", { roomId: ROOM_ID, username: "Rahul (Participant)" });
   await user2SyncPromise;
 
-  // TEST 3: Host plays video -> Both users should receive 'play'
-  console.log("\n--- TEST 3: Host plays video ---");
-  let hostReceivedPlay = false;
-  let user2ReceivedPlay = false;
+  // TEST 3: Host plays video with timestamp -> Both users should receive 'play' with exact time
+  console.log("\n--- TEST 3: Host plays video with timestamp (42s) ---");
+  let hostPlayTime = null;
+  let user2PlayTime = null;
 
-  clientHost.once("play", () => { hostReceivedPlay = true; });
-  clientUser2.once("play", () => { user2ReceivedPlay = true; });
+  clientHost.once("play", (data) => { hostPlayTime = data?.currentTime; });
+  clientUser2.once("play", (data) => { user2PlayTime = data?.currentTime; });
 
-  clientHost.emit("play");
+  clientHost.emit("play", { currentTime: 42 });
   await wait(300);
 
-  if (hostReceivedPlay && user2ReceivedPlay) {
-    console.log("✓ Both Host and Participant received synchronized 'play' event");
+  if (hostPlayTime === 42 && user2PlayTime === 42) {
+    console.log("✓ Both Host and Participant received synchronized 'play' with timestamp:", user2PlayTime);
   } else {
-    throw new Error("Play event was not received by both clients");
+    throw new Error("Play event timestamp synchronization failed");
   }
 
-  // TEST 4: Host pauses video -> Both users should receive 'pause'
-  console.log("\n--- TEST 4: Host pauses video ---");
-  let hostReceivedPause = false;
-  let user2ReceivedPause = false;
+  // TEST 4: Host pauses video with timestamp -> Both users should receive 'pause' with exact time
+  console.log("\n--- TEST 4: Host pauses video with timestamp (58s) ---");
+  let hostPauseTime = null;
+  let user2PauseTime = null;
 
-  clientHost.once("pause", () => { hostReceivedPause = true; });
-  clientUser2.once("pause", () => { user2ReceivedPause = true; });
+  clientHost.once("pause", (data) => { hostPauseTime = data?.currentTime; });
+  clientUser2.once("pause", (data) => { user2PauseTime = data?.currentTime; });
 
-  clientHost.emit("pause");
+  clientHost.emit("pause", { currentTime: 58 });
   await wait(300);
 
-  if (hostReceivedPause && user2ReceivedPause) {
-    console.log("✓ Both Host and Participant received synchronized 'pause' event");
+  if (hostPauseTime === 58 && user2PauseTime === 58) {
+    console.log("✓ Both Host and Participant received synchronized 'pause' with timestamp:", user2PauseTime);
   } else {
-    throw new Error("Pause event was not received by both clients");
+    throw new Error("Pause event timestamp synchronization failed");
   }
 
   // TEST 5: Host seeks video -> Both users should receive 'seek' with exact time
@@ -138,8 +138,25 @@ async function runTests() {
     throw new Error("Failed to synchronize video change");
   }
 
-  // TEST 8: Host promotes Participant to Moderator
-  console.log("\n--- TEST 8: Host promotes Participant to Moderator ---");
+  // TEST 8: Real-Time Chat Message broadcasting
+  console.log("\n--- TEST 8: Real-Time Chat message between Host and Participant ---");
+  let hostReceivedChat = null;
+  let user2ReceivedChat = null;
+
+  clientHost.once("chat_message", (data) => { hostReceivedChat = data; });
+  clientUser2.once("chat_message", (data) => { user2ReceivedChat = data; });
+
+  clientUser2.emit("chat_message", { message: "Hello from Participant!" });
+  await wait(300);
+
+  if (hostReceivedChat && user2ReceivedChat && hostReceivedChat.message === "Hello from Participant!") {
+    console.log("✓ Both users received synchronized chat message:", hostReceivedChat.message);
+  } else {
+    throw new Error("Chat message failed to broadcast");
+  }
+
+  // TEST 9: Host promotes Participant to Moderator
+  console.log("\n--- TEST 9: Host promotes Participant to Moderator ---");
   let promotedRole = null;
 
   clientUser2.once("role_assigned", (data) => {
@@ -154,15 +171,15 @@ async function runTests() {
     throw new Error("Failed to promote user to Moderator");
   }
 
-  // TEST 9: Newly promoted Moderator can now control playback (play video)
-  console.log("\n--- TEST 9: Moderator plays video ---");
+  // TEST 10: Newly promoted Moderator can now control playback (play video)
+  console.log("\n--- TEST 10: Moderator plays video ---");
   let playFromModReceived = false;
 
   clientHost.once("play", () => {
     playFromModReceived = true;
   });
 
-  clientUser2.emit("play");
+  clientUser2.emit("play", { currentTime: 100 });
   await wait(300);
 
   if (playFromModReceived) {
@@ -171,8 +188,8 @@ async function runTests() {
     throw new Error("Moderator play event failed");
   }
 
-  // TEST 10: Host removes Participant
-  console.log("\n--- TEST 10: Host removes user from room ---");
+  // TEST 11: Host removes Participant
+  console.log("\n--- TEST 11: Host removes user from room ---");
   let removedNotificationReceived = false;
 
   clientUser2.once("removed_by_host", (data) => {
@@ -187,7 +204,7 @@ async function runTests() {
     throw new Error("Removed user was not notified");
   }
 
-  console.log("\n🎉 ALL 10 TEST SUITES PASSED FLAWLESSLY! 🎉\n");
+  console.log("\n🎉 ALL 11 TEST SUITES (SYNC, RBAC & CHAT) PASSED FLAWLESSLY! 🎉\n");
   clientHost.disconnect();
   clientUser2.disconnect();
   process.exit(0);

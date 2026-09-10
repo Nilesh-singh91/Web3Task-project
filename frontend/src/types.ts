@@ -56,3 +56,12 @@ export interface ParticipantRemovedPayload {
 export interface ErrorMessagePayload {
   message: string;
 }
+
+export interface ChatMessage {
+  id: string;
+  userId: string;
+  userName: string;
+  message: string;
+  timestamp: string;
+  roomId: string;
+}

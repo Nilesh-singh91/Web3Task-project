@@ -56,6 +56,7 @@ app.get("/api/room/:roomId", (req, res) => {
     roomId: room.roomId,
     videoId: room.videoId,
     playState: room.playState,
+    currentTime: room.currentTime,
     participantCount: room.participants.length,
   });
 });
@@ -93,7 +94,6 @@ io.on("connection", (socket) => {
     socketRoomMap.set(socket.id, cleanRoomId);
     socket.join(cleanRoomId);
 
-    // Save room in SQLite
     saveRoom(cleanRoomId, room.videoId);
 
     // Send current room state back to this client
@@ -107,7 +107,6 @@ io.on("connection", (socket) => {
       participants: room.participants,
     });
 
-    // Only broadcast user_joined if they were NOT already in the room
     if (!isAlreadyJoined) {
       logRoomEvent(cleanRoomId, isNewRoom ? "ROOM_CREATED" : "USER_JOINED", {
         username: cleanUsername,
@@ -128,7 +127,7 @@ io.on("connection", (socket) => {
   });
 
   // EVENT: play
-  socket.on("play", () => {
+  socket.on("play", (data) => {
     const roomId = socketRoomMap.get(socket.id);
     if (!roomId) return;
 
@@ -141,17 +140,18 @@ io.on("connection", (socket) => {
       });
     }
 
-    updatePlayState(roomId, "playing");
-    logRoomEvent(roomId, "PLAY", { by: participant.username });
+    const time = data && typeof data.currentTime === "number" ? Math.max(0, data.currentTime) : null;
+    updatePlayState(roomId, "playing", time);
+    logRoomEvent(roomId, "PLAY", { by: participant.username, currentTime: time });
 
     const room = getRoom(roomId);
     io.to(roomId).emit("play", {
-      currentTime: room ? room.currentTime : 0,
+      currentTime: room ? room.currentTime : (time || 0),
     });
   });
 
   // EVENT: pause
-  socket.on("pause", () => {
+  socket.on("pause", (data) => {
     const roomId = socketRoomMap.get(socket.id);
     if (!roomId) return;
 
@@ -164,12 +164,13 @@ io.on("connection", (socket) => {
       });
     }
 
-    updatePlayState(roomId, "paused");
-    logRoomEvent(roomId, "PAUSE", { by: participant.username });
+    const time = data && typeof data.currentTime === "number" ? Math.max(0, data.currentTime) : null;
+    updatePlayState(roomId, "paused", time);
+    logRoomEvent(roomId, "PAUSE", { by: participant.username, currentTime: time });
 
     const room = getRoom(roomId);
     io.to(roomId).emit("pause", {
-      currentTime: room ? room.currentTime : 0,
+      currentTime: room ? room.currentTime : (time || 0),
     });
   });
 
@@ -187,7 +188,7 @@ io.on("connection", (socket) => {
       });
     }
 
-    const seekTime = Number(time) || 0;
+    const seekTime = Math.max(0, Number(time) || 0);
     updateSeekTime(roomId, seekTime);
     logRoomEvent(roomId, "SEEK", { by: participant.username, time: seekTime });
 
@@ -230,6 +231,36 @@ io.on("connection", (socket) => {
       playState: "paused",
       currentTime: 0,
     });
+  });
+
+  // EVENT: chat_message (Real-Time Room Chat)
+  socket.on("chat_message", ({ message }) => {
+    const roomId = socketRoomMap.get(socket.id);
+    if (!roomId) return;
+
+    const participant = getParticipant(roomId, socket.id);
+    if (!participant) return;
+
+    if (!message || typeof message !== "string" || !message.trim()) return;
+
+    const cleanMessage = message.trim().slice(0, 500); // 500 character limit
+
+    const chatPayload = {
+      id: "msg_" + Date.now() + "_" + Math.random().toString(36).substr(2, 6),
+      userId: participant.userId,
+      userName: participant.username,
+      message: cleanMessage,
+      timestamp: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      roomId: roomId,
+    };
+
+    logRoomEvent(roomId, "CHAT_MESSAGE", {
+      from: participant.username,
+      message: cleanMessage,
+    });
+
+    // Broadcast only to users in this exact room
+    io.to(roomId).emit("chat_message", chatPayload);
   });
 
   // EVENT: assign_role

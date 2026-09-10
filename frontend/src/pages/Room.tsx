@@ -1,6 +1,6 @@
 // Room.tsx
 // Main Watch Party Screen: coordinates YouTube video sync, role management,
-// Socket.IO real-time events, and participant list.
+// Socket.IO real-time events, participant list, and room chat.
 
 import React, { useEffect, useRef, useState } from "react";
 import socket from "../socket";
@@ -13,10 +13,12 @@ import {
   RoleAssignedPayload,
   ParticipantRemovedPayload,
   ErrorMessagePayload,
+  ChatMessage,
 } from "../types";
 import VideoPlayer from "../components/VideoPlayer";
 import Controls from "../components/Controls";
 import Participants from "../components/Participants";
+import Chat from "../components/Chat";
 
 interface RoomProps {
   roomId: string;
@@ -29,15 +31,17 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
   const [playState, setPlayState] = useState<"playing" | "paused">("paused");
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [participants, setParticipants] = useState<Participant[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [myUserId, setMyUserId] = useState<string>("");
   const [myRole, setMyRole] = useState<Role>("Participant");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [statusNotification, setStatusNotification] = useState<string>("");
   const [isCopied, setIsCopied] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<"participants" | "chat">("participants");
 
-  // Use a ref for myUserId so event handlers always have the latest value
-  // WITHOUT needing myUserId in the useEffect dependency array (which would cause infinite loops!)
   const myUserIdRef = useRef<string>("");
+  const currentTimeRef = useRef<number>(0);
+  currentTimeRef.current = currentTime;
 
   const showNotification = (msg: string) => {
     setStatusNotification(msg);
@@ -45,15 +49,12 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
   };
 
   useEffect(() => {
-    // 1. Connect socket if disconnected
     if (!socket.connected) {
       socket.connect();
     }
 
-    // 2. Emit join_room once
     socket.emit("join_room", { roomId, username });
 
-    // 3. Setup Socket.IO Event Listeners
     const handleSyncState = (data: SyncStatePayload) => {
       setVideoId(data.videoId);
       setPlayState(data.playState);
@@ -130,6 +131,10 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
       onLeave();
     };
 
+    const handleChatMessage = (msg: ChatMessage) => {
+      setChatMessages((prev) => [...prev, msg]);
+    };
+
     const handleErrorMessage = (data: ErrorMessagePayload) => {
       setErrorMessage(data.message);
       setTimeout(() => setErrorMessage(""), 5000);
@@ -145,9 +150,9 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
     socket.on("role_assigned", handleRoleAssigned);
     socket.on("participant_removed", handleParticipantRemoved);
     socket.on("removed_by_host", handleRemovedByHost);
+    socket.on("chat_message", handleChatMessage);
     socket.on("error_message", handleErrorMessage);
 
-    // Cleanup listeners when unmounting or switching rooms
     return () => {
       socket.off("sync_state", handleSyncState);
       socket.off("user_joined", handleUserJoined);
@@ -159,40 +164,56 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
       socket.off("role_assigned", handleRoleAssigned);
       socket.off("participant_removed", handleParticipantRemoved);
       socket.off("removed_by_host", handleRemovedByHost);
+      socket.off("chat_message", handleChatMessage);
       socket.off("error_message", handleErrorMessage);
     };
-  }, [roomId, username]); // IMPORTANT: Depend ONLY on roomId and username! Never on myUserId!
+  }, [roomId, username]);
 
-  const handlePlay = () => {
-    socket.emit("play");
+  // Handle Play with current timestamp
+  const handlePlay = (time?: number) => {
+    const t = typeof time === "number" ? time : currentTimeRef.current;
+    socket.emit("play", { currentTime: t });
   };
 
-  const handlePause = () => {
-    socket.emit("pause");
+  // Handle Pause with current timestamp
+  const handlePause = (time?: number) => {
+    const t = typeof time === "number" ? time : currentTimeRef.current;
+    socket.emit("pause", { currentTime: t });
   };
 
+  // Handle Seek
   const handleSeek = (time: number) => {
     socket.emit("seek", { time });
   };
 
+  // Handle Video Change
   const handleChangeVideo = (newVideoId: string) => {
     socket.emit("change_video", { videoId: newVideoId });
   };
 
+  // Handle Role Assignment (Host only)
   const handleAssignRole = (userId: string, role: "Moderator" | "Participant") => {
     socket.emit("assign_role", { userId, role });
   };
 
+  // Handle Remove Participant (Host only)
   const handleRemoveParticipant = (userId: string) => {
     socket.emit("remove_participant", { userId });
   };
 
+  // Handle Send Chat Message
+  const handleSendMessage = (messageText: string) => {
+    socket.emit("chat_message", { message: messageText });
+  };
+
+  // Handle Leave Room
   const handleLeaveRoom = () => {
     socket.emit("leave_room");
     socket.disconnect();
     onLeave();
   };
 
+  // Copy Room Link
   const handleCopyLink = () => {
     const inviteUrl = `${window.location.origin}/?room=${roomId}`;
     navigator.clipboard.writeText(inviteUrl).then(() => {
@@ -309,7 +330,7 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
         </div>
       )}
 
-      {/* Main Grid: Left = Video + Controls, Right = Participants */}
+      {/* Main Grid: Left = Video + Controls, Right = Sidebar (Participants & Chat) */}
       <div
         style={{
           display: "grid",
@@ -328,28 +349,85 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
             onLocalPlay={handlePlay}
             onLocalPause={handlePause}
             onLocalSeek={handleSeek}
+            onTimeUpdate={(t) => setCurrentTime(t)}
           />
 
           <Controls
             role={myRole}
             playState={playState}
             currentTime={currentTime}
-            onPlay={handlePlay}
-            onPause={handlePause}
+            onPlay={() => handlePlay()}
+            onPause={() => handlePause()}
             onSeek={handleSeek}
             onChangeVideo={handleChangeVideo}
           />
         </div>
 
-        {/* Right Column: Participants List & Roles */}
-        <div style={{ flex: "1 1 30%" }}>
-          <Participants
-            participants={participants}
-            currentUserRole={myRole}
-            currentUserId={myUserId}
-            onAssignRole={handleAssignRole}
-            onRemoveParticipant={handleRemoveParticipant}
-          />
+        {/* Right Column: Sidebar (Participants & Chat tabs) */}
+        <div style={{ flex: "1 1 30%", display: "flex", flexDirection: "column", gap: "16px" }}>
+          {/* Tab buttons for mobile/compact views */}
+          <div
+            style={{
+              display: "flex",
+              gap: "8px",
+              background: "#1e1e24",
+              padding: "4px",
+              borderRadius: "8px",
+              border: "1px solid #2d2d38",
+            }}
+          >
+            <button
+              onClick={() => setActiveTab("participants")}
+              style={{
+                flex: 1,
+                padding: "8px 12px",
+                border: "none",
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontWeight: 600,
+                fontSize: "0.85rem",
+                background: activeTab === "participants" ? "#4f46e5" : "transparent",
+                color: "#ffffff",
+                transition: "background 0.2s",
+              }}
+            >
+              👥 Participants ({participants.length})
+            </button>
+            <button
+              onClick={() => setActiveTab("chat")}
+              style={{
+                flex: 1,
+                padding: "8px 12px",
+                border: "none",
+                borderRadius: "6px",
+                cursor: "pointer",
+                fontWeight: 600,
+                fontSize: "0.85rem",
+                background: activeTab === "chat" ? "#4f46e5" : "transparent",
+                color: "#ffffff",
+                transition: "background 0.2s",
+              }}
+            >
+              💬 Chat {chatMessages.length > 0 && `(${chatMessages.length})`}
+            </button>
+          </div>
+
+          {/* Active Tab View */}
+          {activeTab === "participants" ? (
+            <Participants
+              participants={participants}
+              currentUserRole={myRole}
+              currentUserId={myUserId}
+              onAssignRole={handleAssignRole}
+              onRemoveParticipant={handleRemoveParticipant}
+            />
+          ) : (
+            <Chat
+              messages={chatMessages}
+              currentUserId={myUserId}
+              onSendMessage={handleSendMessage}
+            />
+          )}
         </div>
       </div>
     </div>

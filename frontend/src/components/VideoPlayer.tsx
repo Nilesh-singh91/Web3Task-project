@@ -1,10 +1,9 @@
 // VideoPlayer.tsx
-// Embedded YouTube Player using the official YouTube IFrame Player API.
-// Includes loop-prevention logic so remote server updates do not trigger duplicate emits.
+// Embedded YouTube Player using official YouTube IFrame Player API.
+// Features loop-prevention, cross-origin communication, and autoplay handling.
 
 import React, { useEffect, useRef, useState } from "react";
 
-// Extend Window interface for YouTube IFrame API
 declare global {
   interface Window {
     YT: any;
@@ -17,9 +16,10 @@ interface VideoPlayerProps {
   playState: "playing" | "paused";
   currentTime: number;
   canControl: boolean;
-  onLocalPlay?: () => void;
-  onLocalPause?: () => void;
+  onLocalPlay?: (time: number) => void;
+  onLocalPause?: (time: number) => void;
   onLocalSeek?: (time: number) => void;
+  onTimeUpdate?: (time: number) => void;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -30,18 +30,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   onLocalPlay,
   onLocalPause,
   onLocalSeek,
+  onTimeUpdate,
 }) => {
   const playerContainerRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<any>(null);
   const [isReady, setIsReady] = useState(false);
+  const [needsUserInteraction, setNeedsUserInteraction] = useState(false);
 
-  // CRITICAL FLAG: Prevents infinite loop between server and YouTube player events
+  // CRITICAL FLAG: Prevents ping-pong loop between server and YouTube player events
   const isRemoteActionRef = useRef<boolean>(false);
   const currentVideoIdRef = useRef<string>(videoId);
+  const playStateRef = useRef<"playing" | "paused">(playState);
+  playStateRef.current = playState;
 
-  // 1. Initialize YouTube IFrame Player API script
+  // 1. Initialize YouTube IFrame API script & player
   useEffect(() => {
-    // If YouTube API script is not yet added to <head>, inject it
+    let checkInterval: any = null;
+
     if (!window.YT) {
       const tag = document.createElement("script");
       tag.src = "https://www.youtube.com/iframe_api";
@@ -51,6 +56,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const initPlayer = () => {
       if (!window.YT || !window.YT.Player) return;
+      if (playerRef.current) return;
 
       playerRef.current = new window.YT.Player("youtube-player-element", {
         height: "100%",
@@ -58,10 +64,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         videoId: videoId,
         playerVars: {
           autoplay: 0,
-          controls: canControl ? 1 : 0, // Disable native player controls if user is Participant
-          disablekb: canControl ? 0 : 1, // Disable keyboard controls if user cannot control
+          controls: canControl ? 1 : 0,
+          disablekb: canControl ? 0 : 1,
           modestbranding: 1,
           rel: 0,
+          enablejsapi: 1,
+          origin: window.location.origin,
+          playsinline: 1,
         },
         events: {
           onReady: () => {
@@ -69,26 +78,43 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             if (currentTime > 0) {
               playerRef.current.seekTo(currentTime, true);
             }
-            if (playState === "playing") {
-              playerRef.current.playVideo();
+            if (playStateRef.current === "playing") {
+              try {
+                playerRef.current.playVideo();
+              } catch (err) {
+                setNeedsUserInteraction(true);
+              }
             }
           },
           onStateChange: (event: any) => {
-            // If this event was caused by a remote server broadcast, skip sending it back!
+            // If triggered by remote server action, ignore and reset flag once settled
             if (isRemoteActionRef.current) {
-              isRemoteActionRef.current = false;
+              if (
+                (playStateRef.current === "playing" && event.data === 1) ||
+                (playStateRef.current === "paused" && event.data === 2)
+              ) {
+                setTimeout(() => {
+                  isRemoteActionRef.current = false;
+                }, 300);
+              }
               return;
             }
 
-            // Only users with control permissions can send events to server from native player
+            // Only users with control permissions can send events from direct player interaction
             if (!canControl) return;
 
-            // YouTube states: 1 = Playing, 2 = Paused
+            const time = playerRef.current?.getCurrentTime
+              ? Math.floor(playerRef.current.getCurrentTime())
+              : 0;
+
             if (event.data === 1 && onLocalPlay) {
-              onLocalPlay();
+              onLocalPlay(time);
             } else if (event.data === 2 && onLocalPause) {
-              onLocalPause();
+              onLocalPause(time);
             }
+          },
+          onError: (e: any) => {
+            console.warn("YouTube Player error:", e.data);
           },
         },
       });
@@ -97,40 +123,83 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (window.YT && window.YT.Player) {
       initPlayer();
     } else {
+      checkInterval = setInterval(() => {
+        if (window.YT && window.YT.Player) {
+          clearInterval(checkInterval);
+          initPlayer();
+        }
+      }, 100);
       window.onYouTubeIframeAPIReady = initPlayer;
     }
 
     return () => {
+      if (checkInterval) clearInterval(checkInterval);
       if (playerRef.current && playerRef.current.destroy) {
         playerRef.current.destroy();
+        playerRef.current = null;
       }
     };
   }, []);
 
-  // 2. Handle remote video change
+  // 2. Periodic time ticker to keep currentTime synced while playing
+  useEffect(() => {
+    if (!isReady) return;
+
+    const ticker = setInterval(() => {
+      try {
+        if (
+          playerRef.current &&
+          typeof playerRef.current.getCurrentTime === "function"
+        ) {
+          const time = Math.floor(playerRef.current.getCurrentTime());
+          if (onTimeUpdate) {
+            onTimeUpdate(time);
+          }
+        }
+      } catch (e) {}
+    }, 1000);
+
+    return () => clearInterval(ticker);
+  }, [isReady, onTimeUpdate]);
+
+  // 3. Handle remote video change
   useEffect(() => {
     if (!isReady || !playerRef.current) return;
 
     if (currentVideoIdRef.current !== videoId) {
       currentVideoIdRef.current = videoId;
       isRemoteActionRef.current = true;
-      if (typeof playerRef.current.loadVideoById === "function") {
-        playerRef.current.loadVideoById(videoId, 0);
+
+      try {
+        if (playState === "playing") {
+          playerRef.current.loadVideoById(videoId, currentTime || 0);
+        } else {
+          playerRef.current.cueVideoById(videoId, currentTime || 0);
+        }
+      } catch (e) {
+        console.warn("Failed to load/cue video:", e);
       }
     }
-  }, [videoId, isReady]);
+  }, [videoId, isReady, playState, currentTime]);
 
-  // 3. Handle remote play/pause state change
+  // 4. Handle remote play/pause state change
   useEffect(() => {
     if (!isReady || !playerRef.current) return;
 
     try {
-      const state = playerRef.current.getPlayerState ? playerRef.current.getPlayerState() : -1;
+      const state = playerRef.current.getPlayerState
+        ? playerRef.current.getPlayerState()
+        : -1;
 
       if (playState === "playing" && state !== 1) {
         isRemoteActionRef.current = true;
-        playerRef.current.playVideo();
-      } else if (playState === "paused" && state !== 2) {
+        const playPromise = playerRef.current.playVideo();
+        if (playPromise && typeof playPromise.catch === "function") {
+          playPromise.catch(() => {
+            setNeedsUserInteraction(true);
+          });
+        }
+      } else if (playState === "paused" && state !== 2 && state !== 5) {
         isRemoteActionRef.current = true;
         playerRef.current.pauseVideo();
       }
@@ -139,14 +208,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [playState, isReady]);
 
-  // 4. Handle remote seek change
+  // 5. Handle remote seek change
   useEffect(() => {
     if (!isReady || !playerRef.current) return;
 
     try {
-      const current = playerRef.current.getCurrentTime ? playerRef.current.getCurrentTime() : 0;
-      // Seek only if difference is greater than 1.5 seconds to avoid jitter
-      if (Math.abs(current - currentTime) > 1.5) {
+      const current = playerRef.current.getCurrentTime
+        ? playerRef.current.getCurrentTime()
+        : 0;
+      if (Math.abs(current - currentTime) > 2) {
         isRemoteActionRef.current = true;
         playerRef.current.seekTo(currentTime, true);
       }
@@ -155,8 +225,32 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
   }, [currentTime, isReady]);
 
+  // Handler for user interaction overlay to satisfy browser autoplay policy
+  const handleUserGesture = () => {
+    setNeedsUserInteraction(false);
+    if (playerRef.current) {
+      try {
+        playerRef.current.unMute();
+        if (playState === "playing") {
+          playerRef.current.playVideo();
+        }
+      } catch (e) {}
+    }
+  };
+
   return (
-    <div style={{ position: "relative", width: "100%", paddingTop: "56.25%", background: "#000", borderRadius: "12px", overflow: "hidden", boxShadow: "0 8px 30px rgba(0,0,0,0.3)" }}>
+    <div
+      style={{
+        position: "relative",
+        width: "100%",
+        paddingTop: "56.25%",
+        background: "#000",
+        borderRadius: "12px",
+        overflow: "hidden",
+        boxShadow: "0 8px 30px rgba(0,0,0,0.3)",
+      }}
+      onClick={needsUserInteraction ? handleUserGesture : undefined}
+    >
       <div
         id="youtube-player-element"
         ref={playerContainerRef}
@@ -168,6 +262,37 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           height: "100%",
         }}
       />
+
+      {/* Autoplay unlock prompt if browser blocks unmuted playback */}
+      {needsUserInteraction && (
+        <div
+          onClick={handleUserGesture}
+          style={{
+            position: "absolute",
+            top: 0,
+            left: 0,
+            width: "100%",
+            height: "100%",
+            background: "rgba(0,0,0,0.75)",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#fff",
+            zIndex: 10,
+            cursor: "pointer",
+          }}
+        >
+          <span style={{ fontSize: "2.5rem", marginBottom: "8px" }}>🔊</span>
+          <p style={{ margin: 0, fontSize: "1.1rem", fontWeight: 600 }}>
+            Click anywhere to sync video & audio with the Host!
+          </p>
+          <span style={{ fontSize: "0.8rem", color: "#9ca3af", marginTop: "4px" }}>
+            (Browser requires a single user click to allow playback)
+          </span>
+        </div>
+      )}
+
       {!isReady && (
         <div
           style={{
