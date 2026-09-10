@@ -1,11 +1,14 @@
 # 🍿 YouTube Watch Party System
 
-A simple, real-time **YouTube Watch Party** web application. Multiple users can join a watch party room and enjoy synchronized YouTube video playback with role-based access control.
+A complete, real-time **YouTube Watch Party** web application. Multiple users can join a watch party room and enjoy synchronized YouTube video playback with role-based access control.
 
 ---
 
-## 🌐 Live URL
-- **Production URL**: `https://your-watch-party.onrender.com` *(Replace with your deployed URL)*
+## 🌐 Live Production URLs
+
+- **Frontend (Vercel)**: [https://web3-task-project-u6b3.vercel.app](https://web3-task-project-u6b3.vercel.app)
+- **Backend (Render)**: [https://web3task-project.onrender.com](https://web3task-project.onrender.com)
+- **GitHub Repository**: [https://github.com/Nilesh-singh91/Web3Task-project](https://github.com/Nilesh-singh91/Web3Task-project)
 
 ---
 
@@ -15,19 +18,22 @@ A simple, real-time **YouTube Watch Party** web application. Multiple users can 
 3. [Tech Stack](#-tech-stack)
 4. [Architecture & How It Works](#-architecture--how-it-works)
 5. [Folder Structure](#-folder-structure)
-6. [Role-Based Access Control (RBAC)](#-role-based-access-control-rbac)
-7. [WebSocket Events Guide](#-websocket-events-guide)
-8. [YouTube Sync & Infinite Loop Prevention](#-youtube-sync--infinite-loop-prevention)
-9. [Local Setup & Installation](#-local-setup--installation)
-10. [Step-by-Step Testing Guide](#-step-by-step-testing-guide)
-11. [Deployment Guide](#-deployment-guide)
-12. [Interview Questions & Explanations](#-interview-questions--explanations)
+6. [Important Files & Responsibilities](#-important-files--responsibilities)
+7. [Role-Based Access Control (RBAC)](#-role-based-access-control-rbac)
+8. [WebSocket Events Guide](#-websocket-events-guide)
+9. [Backend Permission Security](#-backend-permission-security)
+10. [YouTube Sync & Infinite Loop Prevention](#-youtube-sync--infinite-loop-prevention)
+11. [How To Run Locally](#-how-to-run-locally)
+12. [Environment Variables](#-environment-variables)
+13. [How to Test with Two Browser Tabs](#-how-to-test-with-two-browser-tabs)
+14. [Deployment Architecture](#-deployment-architecture)
+15. [Interview Questions & Explanations](#-interview-questions--explanations)
 
 ---
 
 ## 🚀 Project Overview
 
-In traditional video sharing, everyone watches separately at different times. **YouTube Watch Party** solves this by connecting everyone in a room through WebSockets:
+In traditional video sharing, everyone watches separately at different times. **YouTube Watch Party** connects everyone in a room through WebSockets:
 - When the **Host** or **Moderator** presses **Play**, **Pause**, **Seeks**, or **Changes the video**, everyone in the room sees the action immediately in real time.
 - Joiners enter as **Participants** (view-only mode) so random users cannot interrupt playback.
 - The **Host** can promote trusted participants to **Moderators** or remove disruptive users.
@@ -37,12 +43,12 @@ In traditional video sharing, everyone watches separately at different times. **
 ## ✨ Key Features
 
 - ⚡ **Real-time Video Sync**: Play, pause, scrub/seek, and video changes are synchronized across all connected users with sub-second latency.
-- 🏠 **Room-based Model**: Create a room with an automatic code or join any existing room.
-- 👥 **Role-Based Permissions**:
+- 🏠 **Room-based Model**: Create a room with an auto-generated 6-character code or join any existing room.
+- 👥 **Role-Based Access Control (RBAC)**:
   - **Host**: Room creator. Full control over playback, roles, and participant removals.
   - **Moderator**: Assigned by Host. Can control playback and change video.
   - **Participant**: View-only mode. Screen automatically syncs with the room.
-- 🛡️ **Server-Side Security**: Permissions are checked on the server (Node.js). If a participant tampers with frontend code to send a `play` or `change_video` command, the backend rejects it with an error.
+- 🛡️ **Strict Backend Permission Enforcement**: Permissions are checked on the server (Node.js). If a participant sends an unauthorized `play` or `change_video` event, the backend rejects it.
 - 🎥 **YouTube IFrame API Integration**: Embeds YouTube directly without requiring complex third-party media players.
 - 🔄 **Loop-Prevention Mechanism**: Prevents echoing events between YouTube's internal player and the WebSocket server.
 - 💾 **SQLite Persistence**: Stores created rooms and audit logs for events.
@@ -51,13 +57,14 @@ In traditional video sharing, everyone watches separately at different times. **
 
 ## 🛠️ Tech Stack
 
-| Layer | Technology | Why We Chose It |
+| Layer | Technology | Purpose |
 |---|---|---|
 | **Frontend** | React (TypeScript + Vite) | Fast, modular component structure, strong type safety |
 | **Backend** | Node.js + Express | Lightweight, fast event-driven HTTP server |
 | **Real-time** | Socket.IO | Reliable WebSocket communication with fallback & auto-reconnect |
-| **Database** | SQLite3 | Zero-configuration SQL database, perfect for local storage and persistence |
-| **Video** | YouTube IFrame Player API | Official API from Google to control YouTube videos programmatically |
+| **Database** | SQLite3 | Zero-configuration SQL database for local storage and event persistence |
+| **Video** | YouTube IFrame Player API | Official API to control YouTube videos programmatically |
+| **Deployment** | Vercel (Frontend) + Render (Backend) | Production hosting |
 
 ---
 
@@ -122,13 +129,41 @@ web3task/
 │   ├── index.html
 │   ├── package.json
 │   ├── tsconfig.json
+│   ├── vercel.json               # SPA routing rewrite for Vercel
 │   ├── vite.config.ts
 │   ├── .env
 │   └── .env.example
 │
+├── render.yaml                   # Render Blueprint configuration
 ├── .gitignore
 └── README.md
 ```
+
+---
+
+## 📄 Important Files & Responsibilities
+
+### Backend
+- **`backend/src/server.js`**:
+  Initializes Express, HTTP server, and Socket.IO. Listens for all client socket events, performs strict role validation, and broadcasts sync messages to the room.
+- **`backend/src/rooms.js`**:
+  Keeps all active rooms in memory. Manages participants, roles, playback state, and handles idempotency (preventing duplicate joins from the same socket).
+- **`backend/src/database.js`**:
+  Initializes SQLite (`watchparty.db`) to record created rooms and major playback/role events.
+- **`backend/test-sync.js`**:
+  Automated integration test verifying all 10 core real-time synchronization flows.
+
+### Frontend
+- **`frontend/src/components/VideoPlayer.tsx`**:
+  Embeds the YouTube video using `window.YT.Player`. Uses an `isRemoteActionRef` flag to suppress echoing events back to the server.
+- **`frontend/src/components/Controls.tsx`**:
+  Renders playback controls (Play, Pause, +/- 10s Seek, and YouTube URL/ID parser). Disables controls for Participants.
+- **`frontend/src/components/Participants.tsx`**:
+  Displays all connected participants with badges (`Host`, `Moderator`, `Participant`) and displays role management buttons for the Host.
+- **`frontend/src/pages/Home.tsx`**:
+  Landing page for creating or joining a room.
+- **`frontend/src/pages/Room.tsx`**:
+  Coordinates real-time Socket.IO events, sync state, and participant updates.
 
 ---
 
@@ -145,21 +180,19 @@ web3task/
 | **Remove Participant** | ✅ | ❌ | ❌ | Server + UI |
 | **Watch Video** | ✅ | ✅ | ✅ | Everyone |
 
-> **Crucial Rule**: The frontend hides/disables controls for Participants, but **the backend independently validates the user's role** in `server.js` before executing any action. If an unauthorized client manually fires a WebSocket event, the server blocks it and emits an error message.
-
 ---
 
 ## 📡 WebSocket Events Guide
 
 ### Client to Server (Emit):
-- `join_room` (`{ roomId, username }`): User joins room (Host if first, Participant if existing).
+- `join_room` (`{ roomId, username }`): User joins room (Host if creator, Participant if joiner).
 - `leave_room` (`{}`): User leaves room.
-- `play` (`{}`): Requests playback to start.
-- `pause` (`{}`): Requests playback to pause.
-- `seek` (`{ time }`): Seeks to timestamp in seconds.
-- `change_video` (`{ videoId }`): Changes the YouTube video ID and resets time to 0.
+- `play` (`{}`): Requests playback to start (Host/Moderator only).
+- `pause` (`{}`): Requests playback to pause (Host/Moderator only).
+- `seek` (`{ time }`): Seeks to timestamp in seconds (Host/Moderator only).
+- `change_video` (`{ videoId }`): Changes YouTube video ID and resets time to 0 (Host/Moderator only).
 - `assign_role` (`{ userId, role }`): Host promotes or demotes a participant.
-- `remove_participant` (`{ userId }`): Host kicks a participant.
+- `remove_participant` (`{ userId }`): Host removes a participant.
 
 ### Server to Client (Listen):
 - `sync_state` (`{ roomId, videoId, playState, currentTime, myUserId, myRole, participants }`): Initial state sent to a newly joined client.
@@ -170,8 +203,8 @@ web3task/
 - `seek` (`{ time }`): Broadcast when video scrubs to new time.
 - `change_video` (`{ videoId, playState, currentTime }`): Broadcast when video changes.
 - `role_assigned` (`{ userId, username, role, participants }`): Broadcast when role changes.
-- `participant_removed` (`{ userId, participants }`): Broadcast when participant is kicked.
-- `removed_by_host` (`{ message }`): Sent directly to the kicked user.
+- `participant_removed` (`{ userId, participants }`): Broadcast when participant is removed.
+- `removed_by_host` (`{ message }`): Sent directly to the removed user.
 - `error_message` (`{ message }`): Sent back if an action was unauthorized or invalid.
 
 ---
@@ -205,134 +238,96 @@ socket.emit("play");
 
 ---
 
-## 💻 Local Setup & Installation
+## 💻 How To Run Locally
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) (version 18 or higher)
-- npm (installed with Node)
+- Node.js (version 18 or higher)
+- npm
 
----
-
-### Step 1: Clone or Navigate to Project
+### Step 1: Start Backend
 ```bash
-cd C:\Users\niles\Desktop\web3task
+cd backend
+npm install
+npm start
 ```
+> Backend runs at: `http://localhost:5000`  
+> *(Run automated tests anytime: `npm test`)*
+
+### Step 2: Start Frontend
+Open a second terminal:
+```bash
+cd frontend
+npm install
+npm run dev
+```
+> Frontend runs at: `http://localhost:5173`
 
 ---
 
-### Step 2: Backend Setup
-1. Navigate to the `backend` directory:
-   ```bash
-   cd backend
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start the backend server:
-   ```bash
-   npm start
-   ```
-   The backend will run at: `http://localhost:5000`
+## ⚙️ Environment Variables
 
-*(To run automated tests on the backend at any time: `npm test`)*
+### Local Development
+- **`backend/.env`**:
+  ```env
+  PORT=5000
+  CLIENT_URL=http://localhost:5173
+  ```
+- **`frontend/.env`**:
+  ```env
+  VITE_BACKEND_URL=http://localhost:5000
+  ```
 
----
-
-### Step 3: Frontend Setup
-1. Open a **second terminal** and navigate to `frontend`:
-   ```bash
-   cd frontend
-   ```
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start the Vite dev server:
-   ```bash
-   npm run dev
-   ```
-   The frontend will run at: `http://localhost:5173`
+### Production Deployment
+- **Render Backend**:
+  ```env
+  PORT=5000
+  CLIENT_URL=*
+  ```
+- **Vercel Frontend**:
+  ```env
+  VITE_BACKEND_URL=https://web3task-project.onrender.com
+  ```
 
 ---
 
-## 🧪 Step-by-Step Testing Guide
+## 🧪 How to Test with Two Browser Tabs
 
-### Test with Two Browser Tabs:
-1. Open **Tab 1** (`http://localhost:5173`):
-   - Under **Create a Party**, enter Name: `Nilesh`
-   - Click **Create Room & Join as Host**.
-   - You will see the Room Page with your Role: **HOST**.
-   - Note down the 6-character Room Code (e.g. `ABC123`) or click **📋 Copy Room Link**.
-
-2. Open **Tab 2** (`http://localhost:5173` or paste the copied link):
-   - Under **Join a Party**, enter the Room Code (e.g. `ABC123`) and Name: `Rahul`.
-   - Click **Join Watch Party**.
-   - Notice Rahul joins with Role: **PARTICIPANT**.
-   - In Tab 1 (Host), you immediately see Rahul appear in the **Participants list**.
-
-3. **Test Play/Pause Sync**:
-   - On Tab 1 (Host), click **▶ Play**.
-   - Look at Tab 2: The video on Tab 2 immediately starts playing in sync!
-   - On Tab 1 (Host), click **⏸ Pause**.
-   - Look at Tab 2: The video pauses simultaneously.
-
-4. **Test Seek Sync**:
-   - On Tab 1 (Host), click **+10s ⏩**.
-   - Look at Tab 2: The video skips forward by 10 seconds.
-
-5. **Test Changing Video**:
-   - On Tab 1 (Host), paste any YouTube URL (e.g. `https://www.youtube.com/watch?v=M7lc1UVf-VE`) or ID (`M7lc1UVf-VE`) in the input and click **Change Video**.
-   - Both Tab 1 and Tab 2 switch to the new video simultaneously!
-
-6. **Test Role Elevation (Promote to Moderator)**:
-   - On Tab 1 (Host), locate `Rahul` in the Participants list and click **Make Moderator**.
-   - Tab 2 (Rahul) role badge immediately turns blue: **MODERATOR**.
-   - Now on Tab 2, playback control buttons appear! Rahul can now Play and Pause for everyone.
-
-7. **Test Participant Restriction**:
-   - On Tab 1 (Host), click **Make Participant** on Rahul.
-   - Tab 2 (Rahul) controls disappear, returning to view-only mode.
-
-8. **Test Remove Participant**:
-   - On Tab 1 (Host), click **Remove** next to Rahul.
-   - Tab 2 immediately alerts: *"You have been removed from the room by the Host"* and returns to the Home page.
-   - Tab 1 updates the participant list.
+1. **Tab 1 (Host)**:
+   - Open `https://web3-task-project-u6b3.vercel.app`.
+   - Enter name `Nilesh` $\rightarrow$ click **Create Room & Join as Host**.
+   - Copy the 6-character Room Code.
+2. **Tab 2 (Participant)**:
+   - Open an incognito window at `https://web3-task-project-u6b3.vercel.app`.
+   - Enter the Room Code and name `Rahul` $\rightarrow$ click **Join Watch Party**.
+   - Rahul joins as **Participant** (view-only mode).
+3. **Verify Playback Sync**:
+   - Host clicks **▶ Play** $\rightarrow$ Participant video immediately starts playing.
+   - Host clicks **⏸ Pause** $\rightarrow$ Participant video pauses.
+   - Host clicks **+10s ⏩** $\rightarrow$ Participant video skips forward 10 seconds.
+   - Host pastes a new YouTube URL and clicks **Change Video** $\rightarrow$ Both switch to new video.
+4. **Verify Role Management**:
+   - Host clicks **Make Moderator** next to Rahul $\rightarrow$ Rahul's badge turns blue and controls unlock!
+   - Rahul can now Play and Pause.
+   - Host clicks **Make Participant** $\rightarrow$ Rahul returns to view-only mode.
+   - Host clicks **Remove** $\rightarrow$ Rahul is removed from room with an alert.
 
 ---
 
-## 🚀 Deployment Guide
+## 🚀 Deployment Architecture
 
-### Deploying on Render (Free & Fast)
-1. **Backend (Web Service)**:
-   - Build Command: `npm install`
-   - Start Command: `npm start`
-   - Root Directory: `backend`
-   - Environment Variables:
-     - `PORT=5000`
-     - `CLIENT_URL=https://your-frontend.vercel.app` (or `*`)
-
-2. **Frontend (Static Site / Vercel / Netlify)**:
-   - Build Command: `npm run build`
-   - Output Directory: `dist`
-   - Root Directory: `frontend`
-   - Environment Variables:
-     - `VITE_BACKEND_URL=https://your-backend.onrender.com`
+- **Backend**: Deployed on **Render** as a Node.js Web Service from `backend/`.
+- **Frontend**: Deployed on **Vercel** as a static Vite Single Page Application from `frontend/`.
+- **CORS & WebSockets**: Render server allows cross-origin connections, enabling Socket.IO polling and WebSocket upgrade seamlessly.
 
 ---
 
 ## 💡 Interview Questions & Explanations
 
-Here are the key technical concepts explained in simple English so you can ace your intern interview:
-
-#### 1. Why use WebSockets / Socket.IO instead of normal HTTP REST APIs?
-> *"HTTP is request-response: the client asks and the server answers. But in a watch party, when the host pauses, the server must push that update to all other users immediately without them repeatedly polling. WebSockets maintain an open, bidirectional connection, enabling instant sub-second synchronization."*
-
-#### 2. How did you prevent the YouTube player infinite loop?
-> *"When a remote 'play' event arrives from the server, we set a flag `isRemoteActionRef = true` and programmatically trigger `player.playVideo()`. When YouTube's `onStateChange` listener fires, it checks this flag. If true, it knows the action was initiated remotely, resets the flag, and suppresses emitting another event back to the server."*
-
-#### 3. Why validate permissions on the backend if the UI already hides buttons?
-> *"Frontend restrictions are for user experience, not security. Anyone can open Chrome DevTools, inspect the JavaScript, or execute `socket.emit('change_video')` directly. The backend must always verify that the sender's role is Host or Moderator before processing the request."*
-
-#### 4. How are roles managed?
-> *"When the first user creates a room, they are assigned the 'Host' role. All subsequent users joining that room code receive 'Participant'. The Host can promote Participants to 'Moderator' or demote them. If a Host leaves, the server automatically promotes the next participant to prevent an orphaned room."*
+1. **Why WebSockets instead of HTTP?**  
+   HTTP requires client polling. WebSockets provide a persistent full-duplex connection for instantaneous sub-second playback sync.
+2. **How did you prevent the YouTube infinite loop?**  
+   Using an `isRemoteActionRef` flag to detect and ignore player state changes triggered by server broadcasts.
+3. **Why validate permissions on the backend?**  
+   Frontend buttons can be bypassed via the browser console. The server must verify caller roles before executing any action.
+4. **How are roles assigned?**  
+   First joiner is auto-assigned `Host`. Subsequent joiners get `Participant`. Host can promote to `Moderator` or remove users.
