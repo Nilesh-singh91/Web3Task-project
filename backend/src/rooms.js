@@ -192,3 +192,5 @@ module.exports = {
   canControlPlayback,
   isHost,
 };
+
+// In-memory room management for the YouTube Watch Party.
