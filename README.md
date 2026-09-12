@@ -321,13 +321,3 @@ npm run dev
 
 ---
 
-## 💡 Interview Questions & Explanations
-
-1. **Why WebSockets instead of HTTP?**  
-   HTTP requires client polling. WebSockets provide a persistent full-duplex connection for instantaneous sub-second playback sync.
-2. **How did you prevent the YouTube infinite loop?**  
-   Using an `isRemoteActionRef` flag to detect and ignore player state changes triggered by server broadcasts.
-3. **Why validate permissions on the backend?**  
-   Frontend buttons can be bypassed via the browser console. The server must verify caller roles before executing any action.
-4. **How are roles assigned?**  
-   First joiner is auto-assigned `Host`. Subsequent joiners get `Participant`. Host can promote to `Moderator` or remove users.
