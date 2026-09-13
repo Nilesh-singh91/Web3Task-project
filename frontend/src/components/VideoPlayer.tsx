@@ -74,8 +74,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           start: Math.floor(currentTime || 0),
         },
         events: {
-          onReady: () => {
+          onReady: (event: any) => {
             setIsReady(true);
+            try {
+              const iframe = event.target?.getIframe?.();
+              if (iframe) {
+                iframe.setAttribute(
+                  "allow",
+                  "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                );
+                iframe.setAttribute("allowfullscreen", "true");
+              }
+            } catch (e) {}
+
             if (currentTime > 0) {
               try {
                 playerRef.current.seekTo(currentTime, true);
