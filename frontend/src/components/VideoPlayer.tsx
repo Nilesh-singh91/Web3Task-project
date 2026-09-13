@@ -62,7 +62,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         height: "100%",
         width: "100%",
         videoId: videoId,
-        host: "https://www.youtube-nocookie.com",
         playerVars: {
           autoplay: 0,
           controls: canControl ? 1 : 0,
@@ -70,6 +69,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           modestbranding: 1,
           rel: 0,
           enablejsapi: 1,
+          origin: window.location.origin,
           playsinline: 1,
           start: Math.floor(currentTime || 0),
         },
