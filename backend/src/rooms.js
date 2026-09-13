@@ -8,17 +8,30 @@ function generateUserId() {
   return "user_" + Math.random().toString(36).substring(2, 9);
 }
 
-const DEFAULT_VIDEO_ID = "aqz-KE-bpKQ";
+const DEFAULT_VIDEO_ID = "M7lc1UVf-VE";
 
 function getRoom(roomId) {
   return rooms.get(roomId) || null;
 }
 
 /**
+ * Calculate current room time dynamically if video is playing
+ */
+function getCurrentRoomTime(room) {
+  if (!room) return 0;
+  if (room.playState === "playing" && room.lastUpdated) {
+    const elapsed = (Date.now() - room.lastUpdated) / 1000;
+    return Math.floor(room.currentTime + elapsed);
+  }
+  return Math.floor(room.currentTime || 0);
+}
+
+/**
  * Create a new room or join an existing one.
  * Prevents duplicate participants from the same socket.
+ * Supports reconnecting user with existingUserId to preserve Host/Participant role.
  */
-function createOrJoinRoom(roomId, username, socketId) {
+function createOrJoinRoom(roomId, username, socketId, existingUserId = null) {
   let room = rooms.get(roomId);
   let isNewRoom = false;
 
@@ -29,25 +42,47 @@ function createOrJoinRoom(roomId, username, socketId) {
       videoId: DEFAULT_VIDEO_ID,
       playState: "paused",
       currentTime: 0,
+      lastUpdated: Date.now(),
+      hostUserId: null,
       participants: [],
     };
     rooms.set(roomId, room);
   }
 
-  // IDEMPOTENCY CHECK:
-  // Check if this socket is already registered in this room
-  const existingIndex = room.participants.findIndex((p) => p.socketId === socketId);
+  // IDEMPOTENCY / RECONNECTION CHECK:
+  // Check if this user is already in the room by existingUserId or socketId
+  let existingIndex = -1;
+  if (existingUserId) {
+    existingIndex = room.participants.findIndex((p) => p.userId === existingUserId);
+  }
+  if (existingIndex === -1) {
+    existingIndex = room.participants.findIndex((p) => p.socketId === socketId);
+  }
+
   if (existingIndex !== -1) {
     const existing = room.participants[existingIndex];
+    existing.socketId = socketId;
     existing.username = username.trim();
+    if (room.hostUserId === existing.userId) {
+      existing.role = "Host";
+    }
     return { room, participant: existing, isNewRoom: false, isAlreadyJoined: true };
   }
 
-  // If this is the first participant in the room, make them Host
-  const role = room.participants.length === 0 ? "Host" : "Participant";
+  // Role Assignment:
+  // First participant in the room or returning original creator is Host
+  const isFirst = room.participants.length === 0;
+  const isReturningHost = existingUserId && existingUserId === room.hostUserId;
+  const role = (isFirst || isReturningHost) ? "Host" : "Participant";
+
+  const userId = existingUserId || generateUserId();
+
+  if (role === "Host" && !room.hostUserId) {
+    room.hostUserId = userId;
+  }
 
   const participant = {
-    userId: generateUserId(),
+    userId: userId,
     username: username.trim(),
     role: role,
     socketId: socketId,
@@ -79,7 +114,7 @@ function leaveRoom(socketId) {
 
       let newHost = null;
 
-      // If the Host left, pass the Host role to the next participant (if any)
+      // If the Host left and other participants remain, pass the Host role
       if (leftParticipant.role === "Host" && room.participants.length > 0) {
         const modIndex = room.participants.findIndex((p) => p.role === "Moderator");
         if (modIndex !== -1) {
@@ -89,12 +124,11 @@ function leaveRoom(socketId) {
           room.participants[0].role = "Host";
           newHost = room.participants[0];
         }
+        room.hostUserId = newHost.userId;
       }
 
-      if (room.participants.length === 0) {
-        rooms.delete(roomId);
-      }
-
+      // Do NOT delete the room immediately if participants.length === 0.
+      // This ensures room video, current time, and settings persist across page refresh.
       return { room, leftParticipant, newHost };
     }
   }
@@ -110,6 +144,7 @@ function updatePlayState(roomId, playState, currentTime = null) {
   if (currentTime !== null && typeof currentTime === "number") {
     room.currentTime = currentTime;
   }
+  room.lastUpdated = Date.now();
   return room;
 }
 
@@ -118,6 +153,7 @@ function updateSeekTime(roomId, time) {
   if (!room) return null;
 
   room.currentTime = time;
+  room.lastUpdated = Date.now();
   return room;
 }
 
@@ -128,6 +164,7 @@ function updateVideo(roomId, videoId) {
   room.videoId = videoId;
   room.playState = "paused";
   room.currentTime = 0;
+  room.lastUpdated = Date.now();
   return room;
 }
 
@@ -180,6 +217,7 @@ function isHost(role) {
 
 module.exports = {
   getRoom,
+  getCurrentRoomTime,
   createOrJoinRoom,
   getParticipant,
   getParticipantByUserId,

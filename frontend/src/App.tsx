@@ -10,22 +10,37 @@ export const App: React.FC = () => {
   const [username, setUsername] = useState<string>("");
   const [initialRoomParam, setInitialRoomParam] = useState<string>("");
 
-  // Check URL on load for room parameter (e.g. ?room=XYZ123 or /room/XYZ123)
+  // Check URL on load for room parameter and restore session from localStorage
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
-    const roomParam = urlParams.get("room");
+    let targetRoom = urlParams.get("room")?.trim().toUpperCase() || "";
 
-    if (roomParam) {
-      const cleanParam = roomParam.trim().toUpperCase();
-      setRoomId(cleanParam);
-      setInitialRoomParam(cleanParam);
-    } else {
+    if (!targetRoom) {
       const pathParts = window.location.pathname.split("/").filter(Boolean);
       if (pathParts[0] === "room" && pathParts[1]) {
-        const cleanParam = pathParts[1].trim().toUpperCase();
-        setRoomId(cleanParam);
-        setInitialRoomParam(cleanParam);
+        targetRoom = pathParts[1].trim().toUpperCase();
       }
+    }
+
+    let savedSession: { roomId?: string; username?: string; userId?: string } | null = null;
+    try {
+      const savedRaw = localStorage.getItem("watchparty_session");
+      if (savedRaw) {
+        savedSession = JSON.parse(savedRaw);
+      }
+    } catch (e) {}
+
+    if (targetRoom) {
+      setRoomId(targetRoom);
+      setInitialRoomParam(targetRoom);
+      if (savedSession && savedSession.roomId === targetRoom && savedSession.username) {
+        setUsername(savedSession.username);
+      }
+    } else if (savedSession && savedSession.roomId && savedSession.username) {
+      setRoomId(savedSession.roomId);
+      setUsername(savedSession.username);
+      setInitialRoomParam(savedSession.roomId);
+      window.history.replaceState({}, "", `?room=${savedSession.roomId}`);
     }
   }, []);
 
@@ -36,6 +51,9 @@ export const App: React.FC = () => {
   };
 
   const handleLeaveRoom = () => {
+    try {
+      localStorage.removeItem("watchparty_session");
+    } catch (e) {}
     setRoomId("");
     setUsername("");
     setInitialRoomParam("");

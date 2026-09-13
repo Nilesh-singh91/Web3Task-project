@@ -71,12 +71,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           enablejsapi: 1,
           origin: window.location.origin,
           playsinline: 1,
+          start: Math.floor(currentTime || 0),
         },
         events: {
           onReady: () => {
             setIsReady(true);
             if (currentTime > 0) {
-              playerRef.current.seekTo(currentTime, true);
+              try {
+                playerRef.current.seekTo(currentTime, true);
+              } catch (e) {}
             }
             if (playStateRef.current === "playing") {
               try {

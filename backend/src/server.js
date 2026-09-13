@@ -16,6 +16,7 @@ const {
 
 const {
   getRoom,
+  getCurrentRoomTime,
   createOrJoinRoom,
   getParticipant,
   getParticipantByUserId,
@@ -56,7 +57,7 @@ app.get("/api/room/:roomId", (req, res) => {
     roomId: room.roomId,
     videoId: room.videoId,
     playState: room.playState,
-    currentTime: room.currentTime,
+    currentTime: getCurrentRoomTime(room),
     participantCount: room.participants.length,
   });
 });
@@ -70,12 +71,14 @@ const io = new Server(server, {
 });
 
 const socketRoomMap = new Map(); // socketId -> roomId
+const socketUserMap = new Map(); // socketId -> userId
+const pendingDisconnects = new Map(); // userId -> { timer, roomId, socketId, participant }
 
 io.on("connection", (socket) => {
   console.log(`[Socket Connected] ID: ${socket.id}`);
 
   // EVENT: join_room
-  socket.on("join_room", ({ roomId, username }) => {
+  socket.on("join_room", ({ roomId, username, userId }) => {
     if (!roomId || !username || !username.trim()) {
       return socket.emit("error_message", {
         message: "Room ID and Username are required to join.",
@@ -84,24 +87,33 @@ io.on("connection", (socket) => {
 
     const cleanRoomId = roomId.trim().toUpperCase();
     const cleanUsername = username.trim();
+    const cleanUserId = userId ? String(userId).trim() : null;
+
+    // If user was reconnecting during disconnect grace period, cancel disconnect timer
+    if (cleanUserId && pendingDisconnects.has(cleanUserId)) {
+      clearTimeout(pendingDisconnects.get(cleanUserId).timer);
+      pendingDisconnects.delete(cleanUserId);
+    }
 
     const { room, participant, isNewRoom, isAlreadyJoined } = createOrJoinRoom(
       cleanRoomId,
       cleanUsername,
-      socket.id
+      socket.id,
+      cleanUserId
     );
 
     socketRoomMap.set(socket.id, cleanRoomId);
+    socketUserMap.set(socket.id, participant.userId);
     socket.join(cleanRoomId);
 
     saveRoom(cleanRoomId, room.videoId);
 
-    // Send current room state back to this client
+    // Send current room state back to this client with dynamic currentTime
     socket.emit("sync_state", {
       roomId: room.roomId,
       videoId: room.videoId,
       playState: room.playState,
-      currentTime: room.currentTime,
+      currentTime: getCurrentRoomTime(room),
       myUserId: participant.userId,
       myRole: participant.role,
       participants: room.participants,
@@ -146,7 +158,7 @@ io.on("connection", (socket) => {
 
     const room = getRoom(roomId);
     io.to(roomId).emit("play", {
-      currentTime: room ? room.currentTime : (time || 0),
+      currentTime: room ? getCurrentRoomTime(room) : (time || 0),
     });
   });
 
@@ -333,6 +345,7 @@ io.on("connection", (socket) => {
       });
       targetSocket.leave(roomId);
       socketRoomMap.delete(target.socketId);
+      socketUserMap.delete(target.socketId);
     }
 
     io.to(roomId).emit("participant_removed", {
@@ -341,25 +354,55 @@ io.on("connection", (socket) => {
     });
   });
 
-  // EVENT: leave_room
+  // EVENT: leave_room (explicit user leave)
   socket.on("leave_room", () => {
-    handleUserLeaving(socket);
+    const userId = socketUserMap.get(socket.id);
+    if (userId && pendingDisconnects.has(userId)) {
+      clearTimeout(pendingDisconnects.get(userId).timer);
+      pendingDisconnects.delete(userId);
+    }
+    const roomId = socketRoomMap.get(socket.id);
+    if (roomId) {
+      socket.leave(roomId);
+      executeUserLeaving(socket.id, roomId);
+    }
   });
 
-  // EVENT: disconnect
+  // EVENT: disconnect (refresh or network drop)
   socket.on("disconnect", () => {
     console.log(`[Socket Disconnected] ID: ${socket.id}`);
-    handleUserLeaving(socket);
+    handleUserDisconnect(socket);
   });
 });
 
-function handleUserLeaving(socket) {
+function handleUserDisconnect(socket) {
   const roomId = socketRoomMap.get(socket.id);
-  if (!roomId) return;
+  const userId = socketUserMap.get(socket.id);
+  if (!roomId) {
+    socketRoomMap.delete(socket.id);
+    socketUserMap.delete(socket.id);
+    return;
+  }
 
-  const result = leaveRoom(socket.id);
-  socketRoomMap.delete(socket.id);
-  socket.leave(roomId);
+  // Grace period: allow 3.5 seconds for page refresh or reconnect
+  const timer = setTimeout(() => {
+    if (userId) pendingDisconnects.delete(userId);
+    executeUserLeaving(socket.id, roomId);
+  }, 3500);
+
+  if (userId) {
+    pendingDisconnects.set(userId, {
+      timer,
+      roomId,
+      socketId: socket.id,
+    });
+  }
+}
+
+function executeUserLeaving(socketId, roomId) {
+  const result = leaveRoom(socketId);
+  socketRoomMap.delete(socketId);
+  socketUserMap.delete(socketId);
 
   if (result && result.leftParticipant) {
     const { leftParticipant, room, newHost } = result;

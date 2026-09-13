@@ -31,6 +31,7 @@ async function runTests() {
     clientHost.on("sync_state", (data) => {
       console.log("✓ Host received sync_state:", { role: data.myRole, videoId: data.videoId });
       if (data.myRole !== "Host") throw new Error("Expected role Host for creator");
+      if (data.videoId !== "M7lc1UVf-VE") throw new Error(`Expected default videoId M7lc1UVf-VE, got ${data.videoId}`);
       resolve(data);
     });
   });
@@ -204,9 +205,69 @@ async function runTests() {
     throw new Error("Removed user was not notified");
   }
 
-  console.log("\n🎉 ALL 11 TEST SUITES (SYNC, RBAC & CHAT) PASSED FLAWLESSLY! 🎉\n");
+  // TEST 12: Midway Join Timestamp Synchronization
+  console.log("\n--- TEST 12: Midway join dynamic timestamp synchronization ---");
+  // Host plays at 150 seconds
+  clientHost.emit("play", { currentTime: 150 });
+  await wait(2200); // Wait 2.2 seconds while video is playing
+
+  const clientUser3 = io(SERVER_URL);
+  const user3SyncPromise = new Promise((resolve) => {
+    clientUser3.on("sync_state", (data) => {
+      console.log("✓ New user joined midway and received sync_state:", {
+        playState: data.playState,
+        currentTime: data.currentTime,
+        expectedMin: 152,
+      });
+      if (data.currentTime < 152) {
+        throw new Error(`Midway join timestamp failed! Expected >= 152s, got ${data.currentTime}s`);
+      }
+      resolve(data);
+    });
+  });
+
+  clientUser3.emit("join_room", { roomId: ROOM_ID, username: "MidwayJoiner" });
+  await user3SyncPromise;
+  clientUser3.disconnect();
+
+  // TEST 13: Page Refresh Role & State Preservation
+  console.log("\n--- TEST 13: Host page refresh role & state preservation ---");
+  // Host simulates refresh: disconnects old socket, connects new socket with same userId
+  const hostSavedUserId = (await new Promise((resolve) => {
+    clientHost.once("sync_state", (d) => resolve(d.myUserId));
+    clientHost.emit("join_room", { roomId: ROOM_ID, username: "Nilesh (Host)" });
+  }));
+
   clientHost.disconnect();
-  clientUser2.disconnect();
+  await wait(500); // Brief network gap during page reload
+
+  const clientHostRefreshed = io(SERVER_URL);
+  const refreshSyncPromise = new Promise((resolve) => {
+    clientHostRefreshed.on("sync_state", (data) => {
+      console.log("✓ Host after refresh received sync_state:", {
+        role: data.myRole,
+        userId: data.myUserId,
+        videoId: data.videoId,
+      });
+      if (data.myRole !== "Host") {
+        throw new Error(`Role was not preserved on refresh! Got ${data.myRole}, expected Host`);
+      }
+      if (data.myUserId !== hostSavedUserId) {
+        throw new Error("User ID was not preserved across refresh!");
+      }
+      resolve(data);
+    });
+  });
+
+  clientHostRefreshed.emit("join_room", {
+    roomId: ROOM_ID,
+    username: "Nilesh (Host)",
+    userId: hostSavedUserId,
+  });
+  await refreshSyncPromise;
+  clientHostRefreshed.disconnect();
+
+  console.log("\n🎉 ALL 13 TEST SUITES (SYNC, RBAC, MIDWAY TIMESTAMPS & REFRESH) PASSED FLAWLESSLY! 🎉\n");
   process.exit(0);
 }
 

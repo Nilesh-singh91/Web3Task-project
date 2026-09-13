@@ -27,7 +27,7 @@ interface RoomProps {
 }
 
 export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
-  const [videoId, setVideoId] = useState<string>("aqz-KE-bpKQ");
+  const [videoId, setVideoId] = useState<string>("M7lc1UVf-VE");
   const [playState, setPlayState] = useState<"playing" | "paused">("paused");
   const [currentTime, setCurrentTime] = useState<number>(0);
   const [participants, setParticipants] = useState<Participant[]>([]);
@@ -49,11 +49,28 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
   };
 
   useEffect(() => {
+    let savedUserId: string | undefined;
+    try {
+      const sessionRaw = localStorage.getItem("watchparty_session");
+      if (sessionRaw) {
+        const session = JSON.parse(sessionRaw);
+        if (session.roomId === roomId && typeof session.userId === "string") {
+          const validUserId: string = session.userId;
+          savedUserId = validUserId;
+          setMyUserId(validUserId);
+          myUserIdRef.current = validUserId;
+          if (session.role) {
+            setMyRole(session.role);
+          }
+        }
+      }
+    } catch (e) {}
+
     if (!socket.connected) {
       socket.connect();
     }
 
-    socket.emit("join_room", { roomId, username });
+    socket.emit("join_room", { roomId, username, userId: savedUserId });
 
     const handleSyncState = (data: SyncStatePayload) => {
       setVideoId(data.videoId);
@@ -63,6 +80,18 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
       myUserIdRef.current = data.myUserId;
       setMyRole(data.myRole);
       setParticipants(data.participants);
+
+      try {
+        localStorage.setItem(
+          "watchparty_session",
+          JSON.stringify({
+            roomId,
+            username,
+            userId: data.myUserId,
+            role: data.myRole,
+          })
+        );
+      } catch (e) {}
     };
 
     const handleUserJoined = (data: {
@@ -116,6 +145,14 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
       if (data.userId === myUserIdRef.current) {
         setMyRole(data.role);
         showNotification(`⭐ Your role was changed to: ${data.role}`);
+        try {
+          const sessionRaw = localStorage.getItem("watchparty_session");
+          if (sessionRaw) {
+            const session = JSON.parse(sessionRaw);
+            session.role = data.role;
+            localStorage.setItem("watchparty_session", JSON.stringify(session));
+          }
+        } catch (e) {}
       } else {
         showNotification(`⭐ ${data.username} is now a ${data.role}`);
       }
@@ -127,6 +164,9 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
     };
 
     const handleRemovedByHost = (data: { message: string }) => {
+      try {
+        localStorage.removeItem("watchparty_session");
+      } catch (e) {}
       alert(data.message || "You have been removed from this room by the Host.");
       onLeave();
     };
@@ -208,6 +248,9 @@ export const Room: React.FC<RoomProps> = ({ roomId, username, onLeave }) => {
 
   // Handle Leave Room
   const handleLeaveRoom = () => {
+    try {
+      localStorage.removeItem("watchparty_session");
+    } catch (e) {}
     socket.emit("leave_room");
     socket.disconnect();
     onLeave();
